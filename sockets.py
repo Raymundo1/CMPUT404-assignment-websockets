@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 import flask
-from flask import Flask, request
+from flask import Flask, request, redirect, make_response, jsonify
 from flask_sockets import Sockets
 import gevent
 from gevent import queue
@@ -39,49 +39,104 @@ class World:
         entry = self.space.get(entity,dict())
         entry[key] = value
         self.space[entity] = entry
-        self.update_listeners( entity )
+        self.update_point_listener( entity )
 
     def set(self, entity, data):
         self.space[entity] = data
-        self.update_listeners( entity )
+        self.update_point_listener( entity )
 
-    def update_listeners(self, entity):
+    # def update_listeners(self, entity):
+    def update_point_listener(self, entity):
         '''update the set listeners'''
-        for listener in self.listeners:
-            listener(entity, self.get(entity))
+        # for listener in self.listeners:
+        #     listener(entity, self.get(entity))
+        self.listeners[0](entity, self.get(entity))
 
     def clear(self):
+        # self.listeners[1]()
         self.space = dict()
-
+        
     def get(self, entity):
         return self.space.get(entity,dict())
     
     def world(self):
         return self.space
 
-myWorld = World()        
 
-def set_listener( entity, data ):
+# https://github.com/uofa-cmput404/cmput404-slides/blob/master/examples/WebSocketsExamples/broadcaster.py
+class Client:
+    def __init__(self):
+        self.queque = queue.Queue()
+
+    def put(self, v):
+        self.queque.put_nowait(v)
+
+    def get(self):
+        return self.queque.get()
+
+
+myWorld = World()
+clients = list()
+
+def set_point_listener( entity, data ):
     ''' do something with the update ! '''
+    item_to_update = {entity:data}
+    send_all_json(item_to_update)
 
-myWorld.add_set_listener( set_listener )
+def set_clear_listener():
+    item_to_update = {"clear": True}
+    send_all_json(item_to_update)
+
+myWorld.add_set_listener( set_point_listener )
+myWorld.add_set_listener( set_clear_listener )
+
+def send_all(msg):
+    for client in clients:
+        client.put(msg)
+
+def send_all_json(obj):
+    send_all(json.dumps(obj))
         
 @app.route('/')
 def hello():
     '''Return something coherent here.. perhaps redirect to /static/index.html '''
-    return None
+    return redirect('static/index.html', code=301)
 
 def read_ws(ws,client):
     '''A greenlet function that reads from the websocket and updates the world'''
     # XXX: TODO IMPLEMENT ME
-    return None
+    try:
+        while True:
+            msg = ws.receive()
+            print("WS RECV: %s" % msg)
+            if(msg is not None):
+                packet = json.loads(msg)
+                for entity, data in packet.items():
+                    myWorld.set(entity, data)
+            else:
+                break
+    except Exception as e:
+        print(e)
 
 @sockets.route('/subscribe')
 def subscribe_socket(ws):
     '''Fufill the websocket URL of /subscribe, every update notify the
        websocket and read updates from the websocket '''
     # XXX: TODO IMPLEMENT ME
-    return None
+    client = Client()
+    clients.append(client)
+    g = gevent.spawn(read_ws, ws, client)
+    print("Subscribing")
+    try:
+        while True:
+            msg = client.get()
+            print("Got a message!")
+            ws.send(msg)
+    except Exception as e:
+        print("WS Error %s" % e)
+    finally:
+        clients.remove(client)
+        gevent.kill(g)
 
 
 # I give this to you, this is how you get the raw body/data portion of a post in flask
@@ -99,25 +154,30 @@ def flask_post_json():
 @app.route("/entity/<entity>", methods=['POST','PUT'])
 def update(entity):
     '''update the entities via this interface'''
-    return None
+    myWorld.set(entity, flask_post_json())
+    response = make_response(jsonify(myWorld.get(entity)), 200)
+    return response
 
 @app.route("/world", methods=['POST','GET'])    
 def world():
     '''you should probably return the world here'''
-    return None
+    response = make_response(jsonify(myWorld.world()), 200)
+    return response
 
 @app.route("/entity/<entity>")    
 def get_entity(entity):
     '''This is the GET version of the entity interface, return a representation of the entity'''
-    return None
+    response = make_response(jsonify(myWorld.get(entity)), 200)
+    return response
 
 
 @app.route("/clear", methods=['POST','GET'])
 def clear():
     '''Clear the world out!'''
-    return None
-
-
+    myWorld.listeners[1]()
+    myWorld.clear()
+    response = make_response(jsonify(myWorld.world()), 200)
+    return response
 
 if __name__ == "__main__":
     ''' This doesn't work well anymore:

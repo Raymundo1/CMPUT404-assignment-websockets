@@ -48,7 +48,7 @@ world = {};
 function drawCircle(context,entity) {
     with(context) {
         beginPath();                
-        lineWidth = 3;
+        lineWidth = 2;
         var x = entity["x"];
         var y = entity["y"];
         //moveTo(x,y);
@@ -123,8 +123,13 @@ function getPosition(e) {
 
 function addEntity(entity, data) {
     world[entity] = data;
-    drawNextFrame(); // (but should we?)
+    // drawNextFrame(); // (but should we?)
     //XXX: Send a XHTML Request that updates the entity you just modified!
+    data_to_send = {};
+    data_to_send[entity] = data;
+    socket.send(
+        JSON.stringify(data_to_send)
+    );
 }
 var counter = 0;
 function addEntityWithoutName(data) {
@@ -228,24 +233,69 @@ mouse = (function() {
     return self;
 })();
 
+// https://stackoverflow.com/questions/1484506/random-color-generator
+// author: Anatoliy
+function getRandomColor() {
+  var letters = '0123456789ABCDEF';
+  var color = '#';
+  for (var i = 0; i < 6; i++) {
+    color += letters[Math.floor(Math.random() * 16)];
+  }
+  return color;
+}
+
 // Add the application specific mouse listeners!
 //XXX: TODO Make these prettier!
 mouse.mousedowners.push(function(x,y,clicked,e) {
-    addEntityWithoutName({'x':x,'y':y,'colour':'blue'});
+    addEntityWithoutName({'x':x,'y':y,'colour':getRandomColor()});
 });
 
 mouse.mouseuppers.push(function(x,y,clicked,e) {
-    addEntityWithoutName({'x':x,'y':y,'colour':'red'});
+    addEntityWithoutName({'x':x,'y':y,'colour':getRandomColor()});
 });
 
+var r = 1;
 mouse.mousedraggers.push(function(x,y,clicked,e) {
-    addEntityWithoutName({'x':x,'y':y,'colour':'green',
-                          'radius':10});
+    addEntityWithoutName({'x':x,'y':y,'colour':getRandomColor(),
+                          'radius':r});
+    if(r < 100){r++;}else{r=1;}
 });
 
 
 function update() {
     drawFrame();
+}
+
+function sendJSONXMLHTTPRequest(url, objects, callback) {
+    var xhr = new XMLHttpRequest();
+    xhr.onreadystatechange = function () {
+        if (xhr.readyState==4) {
+            try {
+                if (xhr.status==200) {
+                    var data = JSON.parse(xhr.responseText);
+                    console.log(data);
+                    callback(data);
+                }
+            } 
+            catch(e) {
+                alert('Error: ' + e.name);
+            }
+        }
+    };
+
+    xhr.open("POST", url, true);
+    xhr.setRequestHeader("Content-Type", "application/json;charset=UTF-8");
+    xhr.setRequestHeader("Accept", "application/json")
+    xhr.send(JSON.stringify(objects) || null)
+}
+
+function updateWorldFromServer(data){
+    if(Object.keys(data).length != 0){
+        world = data;
+        console.log(data);
+        drawNextFrame();
+        drawFrame();
+    }
 }
 
 
@@ -254,6 +304,8 @@ function wsSetup() {
     socket = new WebSocket(url);
     socket.onopen = function() {
         //XXX: TODO What are you going to do here?
+        // get the whole world by XMLRequest
+        sendJSONXMLHTTPRequest("http://"+host+"/world", null, updateWorldFromServer);
     };
     socket.onerror = function(msg) {
         debug("WebSocket Error:" + msg.data);
@@ -261,7 +313,20 @@ function wsSetup() {
     socket.onmessage = function(msg) {  
         try {
             debug("WebSocket Recv:" + msg.data);
-            //XXX: TODO What are you going to do here?            
+            //XXX: TODO What are you going to do here?  
+            var item_to_update = JSON.parse(msg.data);
+            if ('clear' in item_to_update){
+                world = {}
+            }else{
+                // https://stackoverflow.com/questions/34913675/how-to-iterate-keys-values-in-javascript
+                for (var key in item_to_update){
+                    if(item_to_update.hasOwnProperty(key)){
+                        world[key] = item_to_update[key];
+                    }
+                }
+            }
+            
+            drawNextFrame();  
         } catch (e) {
             alert("socket on message: " + e);
         }
@@ -269,9 +334,6 @@ function wsSetup() {
 }
 
 wsSetup();
-
-
-
 
 // 30 frames per second
 setInterval( update, 1000/30.0);
